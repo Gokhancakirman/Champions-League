@@ -77,4 +77,117 @@ class SeasonRepository
         $season->total_weeks = ($teamCount - 1) * 2; // Standard season length
         $season->save();
     }
+
+    public function updateMatchResult($match, $result): void
+    {
+        $match->update([
+            'home_team_score' => $result['home_team_score'],
+            'away_team_score' => $result['away_team_score'],
+            'played' => true
+        ]);
+    }
+
+    public function updateSeasonWeek(Season $season): void
+    {
+        $season->current_week++;
+        $season->save();
+    }
+
+    public function loadMatchesWithRelations($matches)
+    {
+        return $matches->load(['homeTeam', 'awayTeam']);
+    }
+
+    public function loadSeasonWithRelations(Season $season)
+    {
+        return $season->load('standings.seasonTeam.team');
+    }
+
+    public function updateTeamStats($standing, $goalsFor, $goalsAgainst): void
+    {
+        $standing->update([
+            'played' => $standing->played + 1,
+            'goals_for' => $standing->goals_for + $goalsFor,
+            'goals_against' => $standing->goals_against + $goalsAgainst
+        ]);
+    }
+
+    public function updateStandings($season, $match, $result): void
+    {
+        $homeTeamStanding = $season->standings->where('team_id', $match->home_team_id)->first();
+        $awayTeamStanding = $season->standings->where('team_id', $match->away_team_id)->first();
+        
+        $homeScore = $result['home_team_score'];
+        $awayScore = $result['away_team_score'];
+
+        // Update basic stats for both teams
+        $this->updateTeamStats($homeTeamStanding, $homeScore, $awayScore);
+        $this->updateTeamStats($awayTeamStanding, $awayScore, $homeScore);
+
+        // Update points and specific match results
+        if ($homeScore > $awayScore) {
+            $homeTeamStanding->update([
+                'won' => $homeTeamStanding->won + 1,
+                'points' => $homeTeamStanding->points + 3
+            ]);
+            $awayTeamStanding->update([
+                'lost' => $awayTeamStanding->lost + 1
+            ]);
+        } elseif ($homeScore < $awayScore) {
+            $homeTeamStanding->update([
+                'lost' => $homeTeamStanding->lost + 1
+            ]);
+            $awayTeamStanding->update([
+                'won' => $awayTeamStanding->won + 1,
+                'points' => $awayTeamStanding->points + 3
+            ]);
+        } else {
+            $homeTeamStanding->update([
+                'drawn' => $homeTeamStanding->drawn + 1,
+                'points' => $homeTeamStanding->points + 1
+            ]);
+            $awayTeamStanding->update([
+                'drawn' => $awayTeamStanding->drawn + 1,
+                'points' => $awayTeamStanding->points + 1
+            ]);
+        }
+    }
+
+    public function resetSeason(Season $season): void
+    {
+        // Delete all related data
+        $season->standings()->delete();
+        $season->fixtures()->delete();
+        $season->teams()->delete();
+        
+        // Reset season properties
+        $season->update([
+            'current_week' => 1,
+            'total_weeks' => 0,
+            'is_active' => true
+        ]);
+    }
+
+    public function getAllSeasonsWithWinners()
+    {
+        $seasons = Season::with(['standings.seasonTeam.team'])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $seasons->each(function ($season) {
+            $standing_data = $season->standings->sortByDesc('points')->first();
+            if ($standing_data && $standing_data->seasonTeam) {
+                $season->winner = $standing_data->seasonTeam->team;
+            }
+        });
+
+        return $seasons;
+    }
+
+    public function getActiveSeasonWithRelations()
+    {
+        return Season::with(['standings.seasonTeam.team'])
+            ->where('is_active', true)
+            ->first();
+    }
 }

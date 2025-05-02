@@ -136,19 +136,14 @@ class SeasonService
                 
                 foreach ($matches as $match) {
                     $result = $this->matchSimulator->simulate($match);
-                    $match->home_team_score = $result['home_team_score'];
-                    $match->away_team_score = $result['away_team_score'];
-                    $match->played = true;
-                    $match->save();
-
-                    $this->updateStandings($season, $match, $result);
+                    $this->seasons->updateMatchResult($match, $result);
+                    $this->seasons->updateStandings($season, $match, $result);
                 }
                 
-                $season->current_week++;
-                $season->save();
+                $this->seasons->updateSeasonWeek($season);
                 $this->seasons->makePassiveIfEnded($season);
                 return response()->json([
-                    'matches' => $matches->load(['homeTeam', 'awayTeam'])
+                    'matches' => $this->seasons->loadMatchesWithRelations($matches)
                 ]);
             });
         } catch (\Exception $e) {
@@ -173,19 +168,12 @@ class SeasonService
                     
                     foreach ($matches as $match) {
                         $result = $this->matchSimulator->simulate($match);
-                        $match->home_team_score = $result['home_team_score'];
-                        $match->away_team_score = $result['away_team_score'];
-                        $match->played = true;
-                        $match->save();
-
-                        $this->updateStandings($season, $match, $result);
+                        $this->seasons->updateMatchResult($match, $result);
+                        $this->seasons->updateStandings($season, $match, $result);
                         $allMatches[] = $match;
                     }
                     
-                    $season->current_week++;
-                    $season->save();
-                    
-                    // Refresh the season model to get updated current_week
+                    $this->seasons->updateSeasonWeek($season);
                     $season = $season->fresh();
                 }
 
@@ -193,7 +181,7 @@ class SeasonService
 
                 return response()->json([
                     'matches' => $allMatches,
-                    'season' => $season->load('standings.seasonTeam.team')
+                    'season' => $this->seasons->loadSeasonWithRelations($season)
                 ]);
             });
         } catch (\Exception $e) {
@@ -204,73 +192,12 @@ class SeasonService
         }
     }
 
-    private function updateStandings($season, $match, $result) {
-        $homeTeamStanding = $season->standings->where('team_id', $match->home_team_id)->first();
-        $awayTeamStanding = $season->standings->where('team_id', $match->away_team_id)->first();
-        
-        $homeScore = $result['home_team_score'];
-        $awayScore = $result['away_team_score'];
-        $goalDiff = $homeScore - $awayScore;
-
-        // Update basic stats for both teams
-        $this->updateTeamStats($homeTeamStanding, $homeScore, $awayScore);
-        $this->updateTeamStats($awayTeamStanding, $awayScore, $homeScore);
-
-        // Update points and specific match results
-        if ($homeScore > $awayScore) {
-            $homeTeamStanding->update([
-                'won' => $homeTeamStanding->won + 1,
-                'points' => $homeTeamStanding->points + 3
-            ]);
-            $awayTeamStanding->update([
-                'lost' => $awayTeamStanding->lost + 1
-            ]);
-        } elseif ($homeScore < $awayScore) {
-            $homeTeamStanding->update([
-                'lost' => $homeTeamStanding->lost + 1
-            ]);
-            $awayTeamStanding->update([
-                'won' => $awayTeamStanding->won + 1,
-                'points' => $awayTeamStanding->points + 3
-            ]);
-        } else {
-            $homeTeamStanding->update([
-                'drawn' => $homeTeamStanding->drawn + 1,
-                'points' => $homeTeamStanding->points + 1
-            ]);
-            $awayTeamStanding->update([
-                'drawn' => $awayTeamStanding->drawn + 1,
-                'points' => $awayTeamStanding->points + 1
-            ]);
-        }
-    }
-
-    private function updateTeamStats($standing, $goalsFor, $goalsAgainst) {
-        $standing->update([
-            'played' => $standing->played + 1,
-            'goals_for' => $standing->goals_for + $goalsFor,
-            'goals_against' => $standing->goals_against + $goalsAgainst
-        ]);
-    }
-
     public function reset(string $slug)
     {
         try {
             return \DB::transaction(function () use ($slug) {
                 $season = $this->seasons->getSeasonWithSlug($slug);
-                
-                // Delete all related data
-                $season->standings()->delete();
-                $season->fixtures()->delete();
-                $season->teams()->delete();
-                
-                // Reset season properties
-                $season->update([
-                    'current_week' => 1,
-                    'total_weeks' => 0,
-                    'is_active' => true
-                ]);
-
+                $this->seasons->resetSeason($season);
                 return response()->json($season);
             });
         } catch (\Exception $e) {
